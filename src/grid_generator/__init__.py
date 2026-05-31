@@ -3,8 +3,10 @@
 # --------------------------------------------------
 # load necessary modules
 # --------------------------------------------------
-from importlib.metadata import PackageNotFoundError, version
-
+from importlib.metadata import (
+    PackageNotFoundError,
+    version,
+)
 
 # --------------------------------------------------
 # resolve package version
