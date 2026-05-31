@@ -1,0 +1,98 @@
+# BSD-3-Clause License - see LICENSE file
+
+# --------------------------------------------------
+# site metadata
+# --------------------------------------------------
+site_name: grid-generator
+site_url: https://uahypersonics.github.io/grid-generator
+site_author: Christoph Hader
+site_description: Structured grid generation utilities for Python.
+
+# --------------------------------------------------
+# github repository
+# --------------------------------------------------
+repo_name: uahypersonics/grid-generator
+repo_url: https://github.com/uahypersonics/grid-generator
+edit_uri: edit/main/docs/
+
+# --------------------------------------------------
+# theme configuration
+# --------------------------------------------------
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: blue grey
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: blue grey
+      toggle:
+        icon: material/weather-night
+        name: Switch to system preference
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+    - content.action.view
+
+# --------------------------------------------------
+# plugins
+# --------------------------------------------------
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            heading_level: 2
+            docstring_style: google
+            members_order: source
+
+# --------------------------------------------------
+# markdown extensions
+# --------------------------------------------------
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - tables
+  - attr_list
+  - md_in_html
+
+# --------------------------------------------------
+# navigation
+# --------------------------------------------------
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - User Guide:
+    - user-guide/index.md
+  - API Reference:
+    - api/index.md
+    - Package: api/package.md
