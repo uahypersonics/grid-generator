@@ -67,3 +67,20 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create GitHub Release (skip if it already exists)
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists; skipping."
+          else
+            gh release create "${{ github.ref_name }}" --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
