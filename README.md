@@ -4,7 +4,7 @@ Structured grid generation utilities for Python.
 
 [![PyPI](https://img.shields.io/pypi/v/grid-generator)](https://pypi.org/project/grid-generator/)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://uahypersonics.github.io/grid-generator/)
-[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.11-blue.svg)](https://www.python.org/downloads/)
 
 `grid-generator` is a lightweight Python package for building simple structured
@@ -52,4 +52,5 @@ publish to PyPI using Trusted Publishing.
 
 ## License
 
-BSD-3-Clause. See [LICENSE](LICENSE) for details.
+GNU General Public License v3.0 or later. See [LICENSE](LICENSE) for the
+complete license terms.
