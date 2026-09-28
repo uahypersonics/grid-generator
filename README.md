@@ -3,7 +3,7 @@
 Structured grid generation utilities for Python.
 
 [![PyPI](https://img.shields.io/pypi/v/grid-generator)](https://pypi.org/project/grid-generator/)
-[![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://uahypersonics.github.io/grid-generator/)
+[![Docs](https://img.shields.io/badge/docs-zensical-blue)](https://uahypersonics.github.io/grid-generator/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.11-blue.svg)](https://www.python.org/downloads/)
 
@@ -30,7 +30,7 @@ print(__version__)
 - Minimal Python package scaffold based on the structure used in `flow-state`
 - and `cfd-io`
 - Minimal public package with only `src/grid_generator/__init__.py`
-- MkDocs documentation scaffold with API reference pages
+- Zensical documentation with API reference pages
 - GitHub Actions workflows for documentation deployment and tag-based PyPI
 	publishing via Trusted Publishing
 
