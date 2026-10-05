@@ -7,9 +7,8 @@ Structured grid generation utilities for Python.
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.11-blue.svg)](https://www.python.org/downloads/)
 
-`grid-generator` is a lightweight Python package for building simple structured
-grids. This repository currently contains the initial public scaffold: package
-layout, documentation, and release automation.
+`grid-generator` builds structured computational grids and writes them through
+the canonical `cfd-io` data model.
 
 ## Install
 
@@ -19,20 +18,33 @@ pip install grid-generator
 
 ## Quick Start
 
-```python
-from grid_generator import __version__
+```bash
+grid-generator cartesian init
+grid-generator cartesian run cartesian.toml
+```
 
-print(__version__)
+The generated TOML file defines required `grid.x` and optional `grid.y` and
+`grid.z` point distributions. Omitting optional axes creates singleton
+dimensions, so Cartesian grids always use the structured `(ni, nj, nk)` array
+contract.
+
+The same workflow is available from Python:
+
+```python
+from grid_generator import generate_cartesian
+
+dataset = generate_cartesian("cartesian.toml")
+print(dataset.grid.shape)
 ```
 
 ## Features
 
-- Minimal Python package scaffold based on the structure used in `flow-state`
-- and `cfd-io`
-- Minimal public package with only `src/grid_generator/__init__.py`
-- Zensical documentation with API reference pages
-- GitHub Actions workflows for documentation deployment and tag-based PyPI
-	publishing via Trusted Publishing
+- One-, two-, and three-dimensional Cartesian tensor-product grids
+- Equidistant, geometric, tanh, and segmented point distributions
+- Composable cubic and quintic transitions between equidistant regions
+- Focused `cartesian init/run` CLI workflow
+- HDF5 output through `cfd-io`
+- Typed Python configuration and generation API
 
 ## Documentation
 
