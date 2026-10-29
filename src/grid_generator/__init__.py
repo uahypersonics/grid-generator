@@ -8,8 +8,14 @@ from importlib.metadata import (
     version,
 )
 
+from grid_generator.body_fitted import generate_body_fitted
 from grid_generator.cartesian import generate_cartesian
-from grid_generator.config import CartesianConfig, load_cartesian_config
+from grid_generator.config import (
+    BodyFittedConfig,
+    CartesianConfig,
+    load_body_fitted_config,
+    load_cartesian_config,
+)
 from grid_generator.distributions import (
     CubicSegment,
     DistributionSpec,
@@ -21,6 +27,7 @@ from grid_generator.distributions import (
     TanhSpec,
     build_distribution,
 )
+from grid_generator.quality import GridQuality, grid_quality
 
 # --------------------------------------------------
 # resolve package version
@@ -32,17 +39,22 @@ except PackageNotFoundError:
 
 
 __all__ = [
+    "BodyFittedConfig",
     "CubicSegment",
     "CartesianConfig",
     "DistributionSpec",
     "EquidistantSegment",
     "EquidistantSpec",
     "GeometricSpec",
+    "GridQuality",
     "QuinticSegment",
     "SegmentedSpec",
     "TanhSpec",
     "__version__",
     "build_distribution",
+    "generate_body_fitted",
     "generate_cartesian",
+    "grid_quality",
+    "load_body_fitted_config",
     "load_cartesian_config",
 ]

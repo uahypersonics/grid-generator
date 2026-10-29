@@ -45,6 +45,93 @@ dtype = "f8"
 
 Artifact paths are resolved relative to the configuration file.
 
+## Body-Fitted Grids
+
+Body-fitted 2D grids wrap a blunt body: a blunted flat plate, a blunted wedge,
+or a sphere-cone meridian. Create the starter configuration (the local Mach 6
+blunted-plate case) and generate its grid:
+
+```bash
+grid-generator body-fitted init
+grid-generator body-fitted run body_fitted.toml
+```
+
+The `[geometry]` table is the same as in
+[canonical-geometries](https://github.com/uahypersonics/canonical-geometries)
+(`geometry plate|wedge|cone init`), so one geometry definition works in both
+tools. The stagnation point is at the origin, x runs downstream and y up.
+
+```toml
+[geometry]
+type = "plate"
+nose_radius = 100.0e-6
+length = 0.5
+
+[domain]
+x_end = 0.01
+height = 5.0e-3
+
+[points]
+n_nose = 81
+n_body = 121
+n_normal = 101
+first_normal_spacing = 1.0e-6
+
+[output]
+filename = "plate_local.su2"
+order = 1
+```
+
+The grid layout:
+
+- **i along the wall**, from the stagnation point around the nose to `x_end`.
+  Nose points are equally spaced in angle up to the tangency point, so the nose
+  block is polar about the nose centre. Along the body the spacing grows
+  geometrically, starting from the nose spacing. The nose and the body share the
+  junction point, so there are `n_nose + n_body - 1` wall points.
+- **j away from the wall**: every j-line runs straight out along the exact wall
+  normal, from the wall to the same height `height`, with geometric growth from
+  `first_normal_spacing`. The j-lines are orthogonal to the wall by construction.
+- **Boundary markers** for SU2 output: `imin` symmetry (the stagnation line),
+  `imax` outflow, `jmin` wall, `jmax` farfield.
+
+`run` prints a quality report: smallest cell area (positive means every cell is
+valid and counter-clockwise), the largest ratio of neighbouring cell sizes along
+i and along j, and the largest wall skew.
+
+There is no shock alignment yet, and the height is constant: choose `height`
+large enough to clear the bow shock at `x_end`. Two consequences of this simple
+layout:
+
+- Near the nose the shock sits close to the wall compared with `height`, so it
+  is resolved by few cells there.
+- The nose block fans out while the body's j-lines are parallel. Away from the
+  wall, cell width along i jumps across the junction line, by up to
+  `(nose_radius + height) / nose_radius` at the outer boundary. The quality
+  report shows this as the largest spacing ratio along i.
+
+The output format follows the file extension, through cfd-io: `.su2` for SU2,
+`.p2dfmt` for ASCII Plot3D, `.msh` for Gmsh, `.h5` for HDF5 (the
+boundary markers are stored with the grid).
+
+For `.msh`, `order` in `[output]` picks the element type, which the extension
+can't express:
+
+```toml
+[output]
+filename = "plate_local.msh"
+order = 2
+```
+
+- `order = 1` (default): one straight-edged 4-node quad per grid cell.
+- `order = 2`: one 9-node quad per 2 x 2 grid cells. Its edges are parabolas
+  through three grid points, so the nose stays curved, which high-order solvers
+  need. Requires odd `n_nose`, `n_body` and `n_normal`; the odd
+  `n_nose` puts the nose/body junction, where the wall curvature jumps, on an
+  element corner instead of inside an element.
+
+`order = 2` with any other extension is rejected.
+
 ## Segmented Distributions
 
 A segmented distribution begins with an equidistant region. Quintic regions

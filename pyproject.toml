@@ -20,12 +20,15 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
 ]
 keywords = ["grid", "structured-grid", "mesh", "cfd"]
 dependencies = [
-    "cfd-io>=0.2.0",
+    "canonical-geometries>=0.1.0",
+    "cfd-io>=0.2.9",
     "numpy>=2.0.0",
+    "pydantic>=2.0",
     "typer>=0.9.0",
 ]
 

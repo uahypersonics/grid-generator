@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from grid_generator.cli.callbacks import version_callback
+from grid_generator.cli.cmd_body_fitted import body_fitted_app
 from grid_generator.cli.cmd_cartesian import cartesian_app
 
 # --------------------------------------------------
@@ -46,3 +47,4 @@ def main(
 # register subcommands
 # --------------------------------------------------
 app.add_typer(cartesian_app, name="cartesian")
+app.add_typer(body_fitted_app, name="body-fitted")
