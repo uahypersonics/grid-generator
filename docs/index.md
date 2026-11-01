@@ -1,11 +1,27 @@
 # grid-generator
 
-`grid-generator` creates structured computational grids for CFD workflows.
+`grid-generator` creates structured computational grids
 
-The current Cartesian workflow generates one-, two-, or three-dimensional
-tensor-product grids and writes canonical HDF5 datasets through `cfd-io`.
+## Quick Start
+
+Install the [PyPI package](https://pypi.org/project/grid-generator/) (see
+[Installation](installation.md) for detailed instructions).
 
 ```bash
-grid-generator cartesian init
-grid-generator cartesian run cartesian.toml
+pip install grid-generator
 ```
+
+Create a starter configuration, edit it, and generate the grid:
+
+```bash
+# initialize grid generator
+grid-generator plate init
+# run grid generator
+grid-generator plate run plate.toml
+```
+
+## License
+
+GNU General Public License v3.0 or later. See
+[LICENSE](https://github.com/uahypersonics/grid-generator/blob/main/LICENSE) for the
+complete license terms.

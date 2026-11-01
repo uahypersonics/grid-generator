@@ -91,8 +91,3 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - User Guide:
-    - user-guide/index.md
-  - API Reference:
-    - api/index.md
-    - Package: api/package.md

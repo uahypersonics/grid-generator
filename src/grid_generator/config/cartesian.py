@@ -10,17 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from grid_generator.distributions.models import (
-    CubicSegment,
-    DistributionSpec,
-    EquidistantSegment,
-    EquidistantSpec,
-    GeometricSpec,
-    QuinticSegment,
-    SegmentedSpec,
-    SegmentSpec,
-    TanhSpec,
-)
+from grid_generator.distributions.models import DistributionSpec
+from grid_generator.distributions.parse import parse_distribution
 
 
 # --------------------------------------------------
@@ -100,7 +91,7 @@ def load_cartesian_config(path: str | Path) -> CartesianConfig:
         output_path = path.parent / output_path
 
     config = CartesianConfig(
-        x=_parse_axis(grid["x"], "x"),
+        x=parse_distribution(grid["x"], "grid.x"),
         y=_parse_optional_axis(grid, "y"),
         z=_parse_optional_axis(grid, "z"),
         output=output_path,
@@ -114,195 +105,5 @@ def _parse_optional_axis(grid: dict[str, Any], name: str) -> DistributionSpec | 
 
     axis = None
     if name in grid:
-        axis = _parse_axis(grid[name], name)
+        axis = parse_distribution(grid[name], f"grid.{name}")
     return axis
-
-
-def _parse_axis(value: Any, name: str) -> DistributionSpec:
-    """Parse and validate one Cartesian axis table."""
-
-    if not isinstance(value, dict):
-        raise TypeError(f"[grid.{name}] must be a table")
-
-    kind = str(value.get("type", "equidistant"))
-    if kind == "segmented":
-        axis = _parse_segmented(value, name)
-    else:
-        axis = _parse_complete_distribution(value, name, kind)
-    return axis
-
-
-def _parse_complete_distribution(
-    value: dict[str, Any],
-    name: str,
-    kind: str,
-) -> DistributionSpec:
-    """Parse an equidistant, geometric, or tanh axis."""
-
-    common_keys = {"type", "start", "end", "n_points"}
-    kind_keys = {
-        "equidistant": set(),
-        "geometric": {"ratio", "first_spacing"},
-        "tanh": {"strength", "cluster"},
-    }
-    if kind not in kind_keys:
-        valid = ", ".join((*kind_keys, "segmented"))
-        raise ValueError(f"[grid.{name}].type must be one of: {valid}")
-
-    allowed_keys = common_keys | kind_keys[kind]
-    unknown_keys = sorted(set(value) - allowed_keys)
-    if unknown_keys:
-        unknown = ", ".join(unknown_keys)
-        raise ValueError(f"unknown [grid.{name}] fields: {unknown}")
-
-    required_keys = {"start", "end", "n_points"}
-    missing_keys = sorted(required_keys - set(value))
-    if missing_keys:
-        missing = ", ".join(missing_keys)
-        raise ValueError(f"[grid.{name}] is missing fields: {missing}")
-
-    common = {
-        "start": float(value["start"]),
-        "end": float(value["end"]),
-        "n_points": int(value["n_points"]),
-    }
-    if kind == "equidistant":
-        distribution: DistributionSpec = EquidistantSpec(**common)
-    elif kind == "geometric":
-        ratio = value.get("ratio")
-        first_spacing = value.get("first_spacing")
-        distribution = GeometricSpec(
-            **common,
-            ratio=float(ratio) if ratio is not None else None,
-            first_spacing=float(first_spacing) if first_spacing is not None else None,
-        )
-    else:
-        if "strength" not in value:
-            raise ValueError(f"[grid.{name}] is missing fields: strength")
-        distribution = TanhSpec(
-            **common,
-            strength=float(value["strength"]),
-            cluster=str(value.get("cluster", "start")),
-        )
-    return distribution
-
-
-def _parse_segmented(value: dict[str, Any], name: str) -> SegmentedSpec:
-    """Parse an ordered segmented distribution."""
-
-    allowed_keys = {"type", "start", "segments"}
-    unknown_keys = sorted(set(value) - allowed_keys)
-    if unknown_keys:
-        unknown = ", ".join(unknown_keys)
-        raise ValueError(f"unknown [grid.{name}] fields: {unknown}")
-    if "start" not in value:
-        raise ValueError(f"[grid.{name}] is missing fields: start")
-
-    raw_segments = value.get("segments")
-    if not isinstance(raw_segments, list):
-        raise TypeError(f"[[grid.{name}.segments]] must define a list of tables")
-
-    segments = tuple(
-        _parse_segment(segment, name, index) for index, segment in enumerate(raw_segments)
-    )
-    distribution = SegmentedSpec(start=float(value["start"]), segments=segments)
-    return distribution
-
-
-def _parse_segment(value: Any, axis_name: str, index: int) -> SegmentSpec:
-    """Parse one linear or polynomial segment table."""
-
-    label = f"grid.{axis_name}.segments[{index}]"
-    if not isinstance(value, dict):
-        raise TypeError(f"[{label}] must be a table")
-
-    kind = value.get("type")
-    common_keys = {"type", "end", "n_points"}
-    if kind == "equidistant":
-        allowed_keys = common_keys | {"spacing"}
-    elif kind in {"cubic", "quintic"}:
-        allowed_keys = common_keys
-    else:
-        raise ValueError(f"[{label}].type must be 'equidistant', 'cubic', or 'quintic'")
-
-    unknown_keys = sorted(set(value) - allowed_keys)
-    if unknown_keys:
-        unknown = ", ".join(unknown_keys)
-        raise ValueError(f"unknown [{label}] fields: {unknown}")
-    if "end" not in value:
-        raise ValueError(f"[{label}] is missing fields: end")
-
-    end = float(value["end"])
-    n_points = value.get("n_points")
-    if kind == "equidistant":
-        spacing = value.get("spacing")
-        segment: SegmentSpec = EquidistantSegment(
-            end=end,
-            n_points=int(n_points) if n_points is not None else None,
-            spacing=float(spacing) if spacing is not None else None,
-        )
-    elif kind == "cubic":
-        if n_points is None:
-            raise ValueError(f"[{label}] is missing fields: n_points")
-        segment = CubicSegment(end=end, n_points=int(n_points))
-    else:
-        if n_points is None:
-            raise ValueError(f"[{label}] is missing fields: n_points")
-        segment = QuinticSegment(end=end, n_points=int(n_points))
-    return segment
-
-
-# --------------------------------------------------
-# starter configuration
-# --------------------------------------------------
-CARTESIAN_CONFIG_TEMPLATE = """\
-# Generated by: grid-generator cartesian init
-# Edit this file, then run: grid-generator cartesian run cartesian.toml
-
-[grid]
-type = "cartesian"
-
-[grid.x]
-type = "equidistant"
-start = 0.1
-end = 1.0
-n_points = 10
-
-[grid.y]
-type = "geometric"
-start = 0.0
-end = 0.05
-n_points = 100
-first_spacing = 1.0e-6
-
-# Segmented axes compose equidistant and polynomial regions. For example:
-# [grid.x]
-# type = "segmented"
-# start = 0.0
-#
-# [[grid.x.segments]]
-# type = "equidistant"
-# end = 0.1
-# spacing = 0.005
-#
-# [[grid.x.segments]]
-# type = "quintic"
-# end = 0.4
-# n_points = 31
-#
-# [[grid.x.segments]]
-# type = "equidistant"
-# end = 1.0
-# spacing = 0.01
-
-# Uncomment to create a three-dimensional grid.
-# [grid.z]
-# type = "equidistant"
-# start = -0.1
-# end = 0.1
-# n_points = 20
-
-[output]
-filename = "grid.hdf5"
-dtype = "f8"
-"""

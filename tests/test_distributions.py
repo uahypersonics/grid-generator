@@ -96,6 +96,29 @@ def test_geometric_uniform_first_spacing_gives_equidistant() -> None:
     np.testing.assert_allclose(points, np.linspace(0.0, 1.0, 11), rtol=1e-14)
 
 
+def test_geometric_max_spacing_caps_the_growth() -> None:
+    """With max_spacing, spacing grows by one ratio from first_spacing, then stays at the cap."""
+
+    # build: 1 micron at the wall, capped at 0.1 mm, over 5 mm
+    spec = GeometricSpec(
+        start=0.0, end=5.0e-3, n_points=101, first_spacing=1.0e-6, max_spacing=1.0e-4
+    )
+    points = build_distribution(spec)
+    spacings = np.diff(points)
+
+    # split into the growing part and the capped part
+    capped = np.isclose(spacings, 1.0e-4, rtol=1e-9)
+    n_growing = int(np.argmax(capped))
+
+    # check: exact ends, first spacing, constant ratio while growing, then a uniform tail
+    check_endpoints_and_count(points, 0.0, 5.0e-3, 101)
+    assert spacings[0] == pytest.approx(1.0e-6, rel=1e-9)
+    ratios = spacings[1:n_growing] / spacings[: n_growing - 1]
+    np.testing.assert_allclose(ratios, ratios[0], rtol=1e-9)
+    assert np.all(capped[n_growing:])
+    assert np.all(spacings <= 1.0e-4 * (1.0 + 1e-9))
+
+
 # --------------------------------------------------
 # tanh
 # --------------------------------------------------
@@ -211,6 +234,28 @@ def test_non_monotonic_result_rejected() -> None:
         ),
         (lambda: GeometricSpec(start=0.0, end=1.0, n_points=5, ratio=0.0), "ratio"),
         (lambda: GeometricSpec(start=0.0, end=1.0, n_points=5, first_spacing=1.0), "first_spacing"),
+        (
+            lambda: GeometricSpec(start=0.0, end=1.0, n_points=5, ratio=1.1, max_spacing=0.5),
+            "needs first_spacing",
+        ),
+        (
+            lambda: GeometricSpec(
+                start=0.0, end=1.0, n_points=5, first_spacing=0.1, max_spacing=0.1
+            ),
+            "larger than first_spacing",
+        ),
+        (
+            lambda: GeometricSpec(
+                start=0.0, end=1.0, n_points=11, first_spacing=0.1, max_spacing=0.5
+            ),
+            "nothing to grow",
+        ),
+        (
+            lambda: GeometricSpec(
+                start=0.0, end=1.0, n_points=5, first_spacing=0.01, max_spacing=0.1
+            ),
+            "too small to reach",
+        ),
         (lambda: TanhSpec(start=0.0, end=1.0, n_points=5, strength=0.0), "strength"),
         (
             lambda: TanhSpec(start=0.0, end=1.0, n_points=5, strength=1.0, cluster="middle"),

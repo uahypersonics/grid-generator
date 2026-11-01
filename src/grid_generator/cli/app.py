@@ -8,8 +8,9 @@ from typing import Annotated
 import typer
 
 from grid_generator.cli.callbacks import version_callback
-from grid_generator.cli.cmd_body_fitted import body_fitted_app
 from grid_generator.cli.cmd_cartesian import cartesian_app
+from grid_generator.cli.cmd_distribution import distribution_app
+from grid_generator.cli.cmd_geometry import GEOMETRY_HELP, build_geometry_app
 
 # --------------------------------------------------
 # root application
@@ -47,4 +48,10 @@ def main(
 # register subcommands
 # --------------------------------------------------
 app.add_typer(cartesian_app, name="cartesian")
-app.add_typer(body_fitted_app, name="body-fitted")
+
+# body-fitted grids, one command group per geometry: plate, wedge, cone
+for geometry_type in GEOMETRY_HELP:
+    app.add_typer(build_geometry_app(geometry_type), name=geometry_type)
+
+# 1D point distributions: reference (info) and 1D point files (init / run)
+app.add_typer(distribution_app, name="distribution")

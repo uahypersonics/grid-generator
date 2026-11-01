@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from canonical_geometries import BluntedTangentOgive
 from cfd_io import read_file
 from typer.testing import CliRunner
 
@@ -19,9 +20,16 @@ from grid_generator import (
     grid_quality,
     load_body_fitted_config,
 )
-from grid_generator.body_fitted import BOUNDARY_MARKERS
+from grid_generator.body_fitted import BOUNDARY_MARKERS, SPAN_MARKERS
 from grid_generator.cli import app
-from grid_generator.config import BODY_FITTED_CONFIG_TEMPLATE
+from grid_generator.config import (
+    BODY_BLOCKS,
+    BODY_FITTED_GEOMETRY_BLOCKS,
+    NORMAL_BLOCKS,
+    body_fitted_template,
+)
+from grid_generator.config.points import arc_length_at_x
+from grid_generator.distributions import build_distribution
 
 runner = CliRunner()
 
@@ -34,18 +42,24 @@ N_BODY = 121
 N_NORMAL = 101
 FIRST_NORMAL_SPACING = 1.0e-6
 
+# the template's [span] table (init --span), and the same table with 5 z-planes
+SPAN_DEFAULT = '[span]\ntype = "equidistant"\nstart = 0.0\nend = 2.0e-3\nn_points = 21'
+SPAN_ON = '[span]\ntype = "equidistant"\nstart = 0.0\nend = 2.0e-3\nn_points = 5'
+SPAN_WIDTH = 2.0e-3
+N_SPAN = 5
+
 
 def write_config(tmp_path: Path, old: str = "", new: str = "") -> Path:
     """Write the starter template, optionally with one replacement, and return its path."""
 
     # build the config text
-    config_text = BODY_FITTED_CONFIG_TEMPLATE
+    config_text = body_fitted_template("plate")
     if old:
         assert old in config_text
         config_text = config_text.replace(old, new, 1)
 
     # write
-    config_path = tmp_path / "body_fitted.toml"
+    config_path = tmp_path / "plate.toml"
     config_path.write_text(config_text)
 
     return config_path
@@ -199,15 +213,452 @@ def test_all_cells_valid_and_counter_clockwise(config_name: str, request) -> Non
 
 
 # --------------------------------------------------
+# extrusion in z (span)
+# --------------------------------------------------
+def write_span_config(tmp_path: Path, old: str = "", new: str = "") -> Path:
+    """Write the template with [span] (5 z-planes), optionally with one more replacement."""
+
+    # template with the span, cut to 5 z-planes
+    config_text = body_fitted_template("plate", span=True)
+    assert SPAN_DEFAULT in config_text
+    config_text = config_text.replace(SPAN_DEFAULT, SPAN_ON)
+
+    # optional extra change
+    if old:
+        assert old in config_text
+        config_text = config_text.replace(old, new, 1)
+
+    # write
+    config_path = tmp_path / "plate.toml"
+    config_path.write_text(config_text)
+
+    return config_path
+
+
+def test_span_extrudes_the_plane(plate_config: BodyFittedConfig, tmp_path: Path) -> None:
+    """Every z-plane holds the 2D grid; z follows the span; the two z-planes get markers."""
+
+    # build the extruded grid and the 2D grid
+    span_dir = tmp_path / "span"
+    span_dir.mkdir()
+    dataset = generate_body_fitted(load_body_fitted_config(write_span_config(span_dir)))
+    grid = dataset.grid
+    plane = generate_body_fitted(plate_config).grid
+
+    # check the shape and the planes
+    assert grid.shape == (N_NOSE + N_BODY - 1, N_NORMAL, N_SPAN)
+    z_expected = np.linspace(0.0, SPAN_WIDTH, N_SPAN)
+    for k in range(N_SPAN):
+        np.testing.assert_array_equal(grid.x[:, :, k], plane.x[:, :, 0])
+        np.testing.assert_array_equal(grid.y[:, :, k], plane.y[:, :, 0])
+        np.testing.assert_allclose(grid.z[:, :, k], z_expected[k], rtol=1e-15)
+
+    # check the description
+    assert dataset.attrs["dimensionality"] == 3
+    assert dataset.attrs["markers"]["structured"] == BOUNDARY_MARKERS | SPAN_MARKERS
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("n_points = 5", "n_point = 5", r"unknown \[span\] fields"),
+        ("end = 2.0e-3\nn_points = 5", "end = -1.0\nn_points = 5", "end must be greater"),
+        ('filename = "plate_local.su2"', 'filename = "plate_local.msh"', "2D only"),
+        ('filename = "plate_local.su2"', 'filename = "plate_local.p2dfmt"', ".p3dfmt"),
+        ('type = "plate"', 'type = "cone"\nhalf_angle = 7.0', "axisymmetric"),
+    ],
+)
+def test_load_rejects_bad_span(tmp_path: Path, old: str, new: str, message: str) -> None:
+    """Bad span tables, 2D-only output formats and cones are rejected."""
+
+    # write a broken config
+    config_path = write_span_config(tmp_path, old, new)
+
+    with pytest.raises(ValueError, match=message):
+        load_body_fitted_config(config_path)
+
+
+def test_load_rejects_p3dfmt_without_span(tmp_path: Path) -> None:
+    """A 2D grid can't go to a .p3dfmt file (the extension names the dimensionality)."""
+
+    # write a 2D config with the 3D extension
+    config_path = write_config(tmp_path, "plate_local.su2", "plate_local.p3dfmt")
+
+    with pytest.raises(ValueError, match="grid is 2D"):
+        load_body_fitted_config(config_path)
+
+
+# --------------------------------------------------
+# point distributions
+# --------------------------------------------------
+# the template's geometric body table, and a segmented body in x: the nose spacing up to
+# 0.2 mm, a quintic transition up to 2 mm, then 50 micron spacing to x_end
+GEOMETRIC_BODY = (
+    '[points.body]\ntype = "geometric"\n'
+    "# points on the body; the growth ratio follows from the count\nn_points = 121\n"
+)
+SEGMENTED_BODY = """[points.body]
+type = "segmented"
+[[points.body.segments]]
+type = "equidistant"
+end = 0.2e-3
+[[points.body.segments]]
+type = "quintic"
+end = 2.0e-3
+n_points = 81
+[[points.body.segments]]
+type = "equidistant"
+spacing = 50.0e-6
+"""
+FINE_SPACING_END = 0.2e-3
+TRANSITION_END = 2.0e-3
+COARSE_SPACING = 50.0e-6
+
+
+def write_template(
+    tmp_path: Path,
+    geometry_type: str = "plate",
+    replacements: tuple[tuple[str, str], ...] = (),
+    body: str = "geometric",
+) -> Path:
+    """Write a starter template with any number of text replacements, and return its path."""
+
+    # build the config text
+    config_text = body_fitted_template(geometry_type, body=body)
+    for old, new in replacements:
+        assert old in config_text
+        config_text = config_text.replace(old, new, 1)
+
+    # write
+    config_path = tmp_path / f"{geometry_type}.toml"
+    config_path.write_text(config_text)
+
+    return config_path
+
+
+@pytest.mark.parametrize("geometry_type", ["plate", "wedge", "tangent-ogive"])
+def test_segmented_body_is_placed_in_x(tmp_path: Path, geometry_type: str) -> None:
+    """Segment ends are in x, spacings along the wall; the body starts at the nose spacing."""
+
+    # build
+    config_path = write_template(tmp_path, geometry_type, body="segmented")
+    config = load_body_fitted_config(config_path)
+    grid = generate_body_fitted(config).grid
+    x_wall = grid.x[:, 0, 0]
+    y_wall = grid.y[:, 0, 0]
+    wall_spacing = np.hypot(np.diff(x_wall), np.diff(y_wall))
+
+    # nose spacing in arc length, and the first body spacing after the junction
+    profile = config.build_profile()
+    nose_spacing = profile.junction_arc_length / (N_NOSE - 1)
+    assert wall_spacing[N_NOSE - 1] == pytest.approx(nose_spacing, rel=1e-8)
+
+    # check the regions in x: fine end within one nose spacing of 0.2 mm (snapped to a
+    # whole number of spacings), transition end exactly at 2 mm
+    assert np.min(np.abs(x_wall - FINE_SPACING_END)) < nose_spacing
+    assert np.min(np.abs(x_wall - TRANSITION_END)) < 1e-12
+    assert x_wall[-1] == pytest.approx(X_END, rel=1e-14)
+
+    # check the coarse region: equal steps along the wall, 50 micron rounded to whole
+    # cells over the 8 mm (in x) from 2 mm to x_end, so within 1 %
+    coarse = wall_spacing[-10:]
+    np.testing.assert_allclose(coarse, coarse[0], rtol=1e-9)
+    assert coarse[0] == pytest.approx(COARSE_SPACING, rel=1e-2)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            'type = "geometric"\n# points in the wall-normal',
+            'type = "tanh"\nstrength = 3.0\ncluster = "both"\n# points in the wall-normal',
+        ),
+        (
+            "to the height\n# max_spacing = 1.0e-4",
+            "to the height\nmax_spacing = 1.0e-4",
+        ),
+    ],
+)
+def test_normal_takes_other_distributions(tmp_path: Path, old: str, new: str) -> None:
+    """The normal direction takes any distribution; it always ends at the height."""
+
+    # tanh needs no first_spacing; drop it there
+    replacements = [(old, new)]
+    if "tanh" in new:
+        replacements.append(("first_spacing = 1.0e-6\n", ""))
+
+    # build
+    config = load_body_fitted_config(write_template(tmp_path, replacements=tuple(replacements)))
+    grid = generate_body_fitted(config).grid
+    outer = np.hypot(grid.x[:, -1, 0] - grid.x[:, 0, 0], grid.y[:, -1, 0] - grid.y[:, 0, 0])
+    normal_spacing = np.hypot(np.diff(grid.x[-1, :, 0]), np.diff(grid.y[-1, :, 0]))
+
+    # check: height reached everywhere; capped growth ends at the cap
+    np.testing.assert_allclose(outer, HEIGHT, rtol=1e-12)
+    if "max_spacing" in new:
+        assert normal_spacing[-1] == pytest.approx(1.0e-4, rel=1e-9)
+    else:
+        assert normal_spacing[0] == pytest.approx(normal_spacing[-1], rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("replacements", "message"),
+    [
+        (
+            (('type = "geometric"\n# points on the body', 'type = "tanh"\n# points on the body'),),
+            "can't start from the nose spacing",
+        ),
+        (
+            (("n_points = 121\n", "n_points = 121\nfirst_spacing = 1.0e-6\n"),),
+            r"\[points.body\] don't set first_spacing",
+        ),
+        (
+            (("first_spacing = 1.0e-6\n", "first_spacing = 1.0e-6\nstart = 0.0\n"),),
+            r"\[points.normal\] don't set start",
+        ),
+        (
+            (
+                (
+                    GEOMETRIC_BODY,
+                    SEGMENTED_BODY.replace("spacing = 50.0e-6", "end = 0.01\nspacing = 50.0e-6"),
+                ),
+            ),
+            r"the last segment ends at \[domain\] x_end; remove its end",
+        ),
+        (
+            (
+                (
+                    GEOMETRIC_BODY,
+                    '[points.body]\ntype = "segmented"\n[[points.body.segments]]\ntype = "equidistant"\n',
+                ),
+            ),
+            "at least two segments",
+        ),
+        (
+            (
+                (
+                    GEOMETRIC_BODY,
+                    SEGMENTED_BODY.replace("end = 0.2e-3", "end = 0.2e-3\nn_points = 5"),
+                ),
+            ),
+            "its spacing is the nose spacing",
+        ),
+        (
+            ((GEOMETRIC_BODY, SEGMENTED_BODY.replace("n_points = 81", "n_points = 121")),),
+            r"\[points.body\] distribution coordinates must be strictly increasing",
+        ),
+    ],
+)
+def test_load_rejects_bad_points(
+    tmp_path: Path, replacements: tuple[tuple[str, str], ...], message: str
+) -> None:
+    """Body types that can't start at the nose spacing, fixed keys and bad segments raise."""
+
+    # write a broken config
+    config_path = write_template(tmp_path, replacements=replacements)
+
+    with pytest.raises(ValueError, match=message):
+        load_body_fitted_config(config_path)
+
+
+# --------------------------------------------------
+# tangent ogive (curved body, optional cylinder)
+# --------------------------------------------------
+# a short ogive (base at about x = 20 mm, R = 4 mm), so x_end can lie past its base
+SHORT_OGIVE = (
+    ("length = 0.5", "length = 0.02"),
+    ("base_radius = 0.05", "base_radius = 4.0e-3"),
+)
+
+
+def test_arc_length_at_x_inverts_the_profile() -> None:
+    """arc_length_at_x finds the wall arc length of an x on a curved body to round-off."""
+
+    # ogive profile and arc lengths along its body
+    profile = BluntedTangentOgive(nose_radius=NOSE_RADIUS, length=0.5, base_radius=0.05)
+    s_junction = profile.junction_arc_length
+    s_body = np.linspace(s_junction, profile.total_length, 50)
+    x_body, _ = profile.point(s_body)
+
+    # check: back from x to s
+    s_found = arc_length_at_x(profile, x_body, s_junction)
+    np.testing.assert_allclose(s_found, s_body, rtol=0.0, atol=1e-15)
+
+
+def test_ogive_grid_ends_at_x_end_on_the_ogive(tmp_path: Path) -> None:
+    """With x_end on the ogive, the wall runs around the nose and along the arc to x_end."""
+
+    # build the template's ogive grid (x_end = 10 mm, base at about 0.5 m)
+    config = load_body_fitted_config(write_template(tmp_path, "tangent-ogive"))
+    grid = generate_body_fitted(config).grid
+    x_wall = grid.x[:, 0, 0]
+    y_wall = grid.y[:, 0, 0]
+
+    # nose circle around (r_n, 0) and ogive arc around (x_base, R - rho)
+    profile = config.build_profile()
+    x_base, base_radius = profile.base_point
+    rho = profile.ogive_radius
+    on_nose = np.arange(x_wall.size) < N_NOSE
+    nose_distance = np.hypot(x_wall[on_nose] - NOSE_RADIUS, y_wall[on_nose])
+    ogive_distance = np.hypot(x_wall[~on_nose] - x_base, y_wall[~on_nose] - (base_radius - rho))
+
+    # check: shape, end at x_end, points on the exact pieces, outer boundary at H
+    assert grid.shape == (N_NOSE + N_BODY - 1, N_NORMAL, 1)
+    assert x_wall[-1] == pytest.approx(X_END, rel=1e-14)
+    np.testing.assert_allclose(nose_distance, NOSE_RADIUS, rtol=1e-12)
+    np.testing.assert_allclose(ogive_distance, rho, rtol=1e-14)
+    outer = np.hypot(grid.x[:, -1, 0] - x_wall, grid.y[:, -1, 0] - y_wall)
+    np.testing.assert_allclose(outer, HEIGHT, rtol=1e-12)
+    assert grid_quality(grid).min_cell_area > 0.0
+
+
+def test_ogive_grid_continues_on_a_cylinder_past_the_base(tmp_path: Path) -> None:
+    """With x_end past the base, a cylinder of the base radius carries the wall to x_end."""
+
+    # short ogive, x_end 10 mm past its base
+    replacements = (*SHORT_OGIVE, ("x_end = 0.01", "x_end = 0.03"))
+    config = load_body_fitted_config(write_template(tmp_path, "tangent-ogive", replacements))
+    grid = generate_body_fitted(config).grid
+    x_wall = grid.x[:, 0, 0]
+    y_wall = grid.y[:, 0, 0]
+
+    # check: two junctions (nose/ogive, ogive/cylinder), last point (x_end, R), wall on the
+    # cylinder at y = R, valid cells
+    profile = config.build_profile()
+    x_base, base_radius = profile.base_point
+    assert profile.junctions.size == 2
+    assert x_wall[-1] == pytest.approx(0.03, rel=1e-14)
+    assert y_wall[-1] == pytest.approx(base_radius, rel=1e-14)
+    np.testing.assert_allclose(y_wall[x_wall > x_base + 1e-12], base_radius, rtol=1e-14)
+    assert grid_quality(grid).min_cell_area > 0.0
+
+
+@pytest.mark.parametrize(
+    ("replacements", "message"),
+    [
+        (
+            (("base_radius = 0.05", "base_radius = 0.05\ncylinder_length = 0.1"),),
+            "cylinder_length isn't used",
+        ),
+        ((("length = 0.5\n", ""),), "length"),
+        ((("x_end = 0.01", "x_end = 50.0e-6"),), "must reach past the nose"),
+        ((("order = 1\n", "order = 1\n\n" + SPAN_ON + "\n"),), "axisymmetric"),
+    ],
+)
+def test_load_rejects_bad_ogive_config(
+    tmp_path: Path, replacements: tuple[tuple[str, str], ...], message: str
+) -> None:
+    """cylinder_length comes from x_end, length is required, x_end must pass the nose, no span."""
+
+    # write a broken config
+    config_path = write_template(tmp_path, "tangent-ogive", replacements)
+
+    with pytest.raises(ValueError, match=message):
+        load_body_fitted_config(config_path)
+
+
+# --------------------------------------------------
+# init options: every template combination runs
+# --------------------------------------------------
+@pytest.mark.parametrize("geometry_type", list(BODY_FITTED_GEOMETRY_BLOCKS))
+@pytest.mark.parametrize("body", list(BODY_BLOCKS))
+@pytest.mark.parametrize("normal", list(NORMAL_BLOCKS))
+def test_cli_init_options_write_runnable_configs(
+    tmp_path: Path, geometry_type: str, body: str, normal: str
+) -> None:
+    """init --body/--normal writes a config that runs, and names the options in its header."""
+
+    # init with the options, then run
+    config_path = tmp_path / f"{geometry_type}.toml"
+    options = ["--body", body, "--normal", normal]
+    result_init = runner.invoke(app, [geometry_type, "init", "-o", str(config_path), *options])
+    result_run = runner.invoke(app, [geometry_type, "run", str(config_path)])
+
+    # check
+    assert result_init.exit_code == 0, result_init.output
+    assert result_run.exit_code == 0, result_run.output
+    config_text = config_path.read_text()
+    assert f'[points.body]\ntype = "{body}"' in config_text
+    assert f'[points.normal]\ntype = "{normal}"' in config_text
+
+
+@pytest.mark.parametrize("geometry_type", ["plate", "wedge"])
+def test_cli_init_span_writes_a_3d_config(tmp_path: Path, geometry_type: str) -> None:
+    """init --span adds the [span] table; the config runs into a 3D grid."""
+
+    # init with --span, then run
+    config_path = tmp_path / f"{geometry_type}.toml"
+    runner.invoke(app, [geometry_type, "init", "-o", str(config_path), "--span"])
+    result = runner.invoke(app, [geometry_type, "run", str(config_path)])
+
+    # check
+    assert result.exit_code == 0, result.output
+    assert "x 21 points" in result.output
+    assert "--span" in config_path.read_text().splitlines()[0]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["cone", "init", "--span"], "axisymmetric"),
+        (["tangent-ogive", "init", "--span"], "axisymmetric"),
+        (["plate", "init", "--body", "tanh"], "--body must be one of"),
+        (["plate", "init", "--normal", "cubic"], "--normal must be one of"),
+    ],
+)
+def test_cli_init_rejects_bad_options(tmp_path: Path, arguments: list[str], message: str) -> None:
+    """Bad option values fail before any file is written."""
+
+    # run
+    config_path = tmp_path / "config.toml"
+    result = runner.invoke(app, [*arguments, "-o", str(config_path)])
+
+    # check
+    assert result.exit_code == 1
+    assert message in result.output
+    assert not config_path.exists()
+
+
+def test_normal_segmented_ends_at_the_height(tmp_path: Path) -> None:
+    """A segmented normal table leaves out the last end; the last segment ends at the height."""
+
+    # equidistant near the wall, a quintic transition, then 0.1 mm spacing to the height
+    normal_block = NORMAL_BLOCKS["geometric"]
+    segmented_normal = """\
+[points.normal]
+type = "segmented"
+[[points.normal.segments]]
+type = "equidistant"
+end = 1.0e-4
+n_points = 11
+[[points.normal.segments]]
+type = "quintic"
+end = 1.0e-3
+n_points = 21
+[[points.normal.segments]]
+type = "equidistant"
+spacing = 1.0e-4
+"""
+    config = load_body_fitted_config(
+        write_template(tmp_path, replacements=((normal_block, segmented_normal),))
+    )
+    normal_distances = build_distribution(config.normal_distribution())
+
+    # check: ends at the height, uniform 0.1 mm cells at the top
+    assert normal_distances[-1] == HEIGHT
+    np.testing.assert_allclose(np.diff(normal_distances)[-5:], 1.0e-4, rtol=1e-9)
+
+
+# --------------------------------------------------
 # configuration
 # --------------------------------------------------
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
-        ("x_end = 0.01", "x_end = 0.6", "must not exceed"),
+        ("nose_radius = 100.0e-6", "nose_radius = 100.0e-6\nlength = 0.5", "length isn't used"),
         ("x_end = 0.01", "x_end = 50.0e-6", "must reach past the nose"),
-        ("first_normal_spacing = 1.0e-6", "first_normal_spacing = 1.0e-2", "smaller than"),
-        ("n_nose = 81", "n_nose = 1", "n_nose"),
+        ("first_spacing = 1.0e-6", "first_spacing = 1.0e-2", "first_spacing must be between"),
+        ("n_points = 81", "n_points = 1", "n_points"),
         ("height = 5.0e-3", "hieght = 5.0e-3", "hieght"),
         ('type = "plate"', 'type = "cone"', "half_angle"),
     ],
@@ -226,7 +677,7 @@ def write_order_2_config(tmp_path: Path, old: str = "", new: str = "") -> Path:
     """Write the template as a second-order .msh config, optionally with one more replacement."""
 
     # Gmsh output, second order
-    config_text = BODY_FITTED_CONFIG_TEMPLATE
+    config_text = body_fitted_template("plate")
     config_text = config_text.replace(
         'filename = "plate_local.su2"', 'filename = "plate_local.msh"'
     )
@@ -238,7 +689,7 @@ def write_order_2_config(tmp_path: Path, old: str = "", new: str = "") -> Path:
         config_text = config_text.replace(old, new, 1)
 
     # write
-    config_path = tmp_path / "body_fitted.toml"
+    config_path = tmp_path / "plate.toml"
     config_path.write_text(config_text)
 
     return config_path
@@ -248,9 +699,9 @@ def write_order_2_config(tmp_path: Path, old: str = "", new: str = "") -> Path:
     ("old", "new", "message"),
     [
         ('filename = "plate_local.msh"', 'filename = "plate_local.su2"', "needs a .msh filename"),
-        ("n_nose = 81", "n_nose = 80", "n_nose = 80"),
-        ("n_body = 121", "n_body = 120", "n_body = 120"),
-        ("n_normal = 101", "n_normal = 100", "n_normal = 100"),
+        ("n_points = 81", "n_points = 80", r"\[points.nose\] 80 points"),
+        ("n_points = 121", "n_points = 120", r"\[points.body\] 120 points"),
+        ("n_points = 101", "n_points = 100", r"\[points.normal\] 100 points"),
         ("order = 2", "order = 3", "order"),
     ],
 )
@@ -286,12 +737,12 @@ def test_load_resolves_output_next_to_the_config(
 # CLI end to end
 # --------------------------------------------------
 def test_cli_init_then_run_writes_su2(tmp_path: Path) -> None:
-    """body-fitted init + run writes an SU2 grid with the right size and four markers."""
+    """plate init + run writes an SU2 grid with the right size and four markers."""
 
     # init and run
-    config_path = tmp_path / "body_fitted.toml"
-    result_init = runner.invoke(app, ["body-fitted", "init", "--output", str(config_path)])
-    result_run = runner.invoke(app, ["body-fitted", "run", str(config_path)])
+    config_path = tmp_path / "plate.toml"
+    result_init = runner.invoke(app, ["plate", "init", "--output", str(config_path)])
+    result_run = runner.invoke(app, ["plate", "run", str(config_path)])
 
     # check the commands and the report
     assert result_init.exit_code == 0, result_init.output
@@ -308,13 +759,86 @@ def test_cli_init_then_run_writes_su2(tmp_path: Path) -> None:
         assert f"MARKER_TAG= {marker}" in su2_text
 
 
+@pytest.mark.parametrize("geometry_type", ["wedge", "cone", "tangent-ogive"])
+def test_cli_init_then_run_other_geometries(tmp_path: Path, geometry_type: str) -> None:
+    """wedge and cone init + run write their own template and grid with the default names."""
+
+    # init and run with the default config name, inside tmp_path
+    config_path = tmp_path / f"{geometry_type}.toml"
+    result_init = runner.invoke(app, [geometry_type, "init", "--output", str(config_path)])
+    result_run = runner.invoke(app, [geometry_type, "run", str(config_path)])
+
+    # check the commands, the template's type and the output file
+    assert result_init.exit_code == 0, result_init.output
+    assert result_run.exit_code == 0, result_run.output
+    assert f'type = "{geometry_type}"' in config_path.read_text()
+    assert f"Generated {geometry_type} grid" in result_run.output
+    assert (tmp_path / f"{geometry_type}_local.su2").exists()
+
+
+def test_cli_run_rejects_a_config_for_another_geometry(tmp_path: Path) -> None:
+    """A plate config given to `cone run` fails and names the right command."""
+
+    # plate config, cone command
+    config_path = write_config(tmp_path)
+    result = runner.invoke(app, ["cone", "run", str(config_path)])
+
+    # check: error points at the plate command, nothing written
+    assert result.exit_code == 1
+    assert "grid-generator plate run" in result.output
+    assert not (tmp_path / "plate_local.su2").exists()
+
+
+def test_cli_span_writes_3d_su2_with_positive_volumes(tmp_path: Path) -> None:
+    """An extruded grid goes to SU2 as hexes with positive volume and six markers."""
+
+    # run
+    config_path = write_span_config(tmp_path)
+    result = runner.invoke(app, ["plate", "run", str(config_path)])
+    assert result.exit_code == 0, result.output
+    assert "201 x 101 x 5 points (200 x 100 x 4 cells)" in result.output
+
+    # read the header counts and markers
+    su2_lines = (tmp_path / "plate_local.su2").read_text().splitlines()
+    assert "NDIME= 3" in su2_lines
+    for marker in (BOUNDARY_MARKERS | SPAN_MARKERS).values():
+        assert f"MARKER_TAG= {marker}" in su2_lines
+
+    # read the hexes (type 12, eight node ids) and the points
+    elem_start = next(n for n, line in enumerate(su2_lines) if line.startswith("NELEM="))
+    n_elements = int(su2_lines[elem_start].split("=")[1])
+    hexes = np.array(
+        [
+            [int(v) for v in line.split()[1:9]]
+            for line in su2_lines[elem_start + 1 : elem_start + 1 + n_elements]
+        ]
+    )
+    point_start = next(n for n, line in enumerate(su2_lines) if line.startswith("NPOIN="))
+    n_points = int(su2_lines[point_start].split("=")[1].split()[0])
+    points = np.array(
+        [
+            [float(v) for v in line.split()[:3]]
+            for line in su2_lines[point_start + 1 : point_start + 1 + n_points]
+        ]
+    )
+
+    # check: corner Jacobian at node 0 (edges to nodes 1, 3, 4 run along +i, +j, +k)
+    corners = points[hexes]
+    edge_i = corners[:, 1] - corners[:, 0]
+    edge_j = corners[:, 3] - corners[:, 0]
+    edge_k = corners[:, 4] - corners[:, 0]
+    jacobian = np.einsum("ij,ij->i", edge_i, np.cross(edge_j, edge_k))
+    assert n_elements == 200 * 100 * 4
+    assert np.all(jacobian > 0.0)
+
+
 def test_cli_su2_reads_back_with_the_same_points(tmp_path: Path) -> None:
     """cfd-io reads the SU2 file back with the generated wall and outer points."""
 
     # init and run
-    config_path = tmp_path / "body_fitted.toml"
-    runner.invoke(app, ["body-fitted", "init", "--output", str(config_path)])
-    runner.invoke(app, ["body-fitted", "run", str(config_path)])
+    config_path = tmp_path / "plate.toml"
+    runner.invoke(app, ["plate", "init", "--output", str(config_path)])
+    runner.invoke(app, ["plate", "run", str(config_path)])
 
     # read back and compare point clouds (SU2 is unstructured, so compare sorted coordinates)
     expected = generate_body_fitted(config_path).grid
@@ -331,7 +855,7 @@ def test_cli_hdf5_keeps_points_and_markers(tmp_path: Path) -> None:
 
     # config writing HDF5 instead of SU2
     config_path = write_config(tmp_path, "plate_local.su2", "plate_local.h5")
-    result = runner.invoke(app, ["body-fitted", "run", str(config_path)])
+    result = runner.invoke(app, ["plate", "run", str(config_path)])
     assert result.exit_code == 0, result.output
 
     # read back
@@ -354,7 +878,7 @@ def test_cli_msh_has_the_element_order(
 
     # config writing Gmsh at the given order
     config_path = write_order_2_config(tmp_path, "order = 2", f"order = {order}")
-    result = runner.invoke(app, ["body-fitted", "run", str(config_path)])
+    result = runner.invoke(app, ["plate", "run", str(config_path)])
     assert result.exit_code == 0, result.output
 
     # element block headers: "dimension entity type count"
@@ -376,10 +900,10 @@ def test_cli_msh_has_the_element_order(
 def test_cli_run_reports_errors_cleanly(tmp_path: Path) -> None:
     """A bad config exits with an error message, not a traceback."""
 
-    # config with x_end past the plate
-    config_path = write_config(tmp_path, "x_end = 0.01", "x_end = 0.6")
-    result = runner.invoke(app, ["body-fitted", "run", str(config_path)])
+    # config with x_end inside the nose
+    config_path = write_config(tmp_path, "x_end = 0.01", "x_end = 50.0e-6")
+    result = runner.invoke(app, ["plate", "run", str(config_path)])
 
     # check
     assert result.exit_code == 1
-    assert "must not exceed" in result.output
+    assert "must reach past the nose" in result.output

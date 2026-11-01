@@ -29,13 +29,18 @@ class EquidistantSpec:
 
 @dataclass(frozen=True, slots=True)
 class GeometricSpec:
-    """Geometrically changing spacing between two endpoints."""
+    """Geometrically changing spacing between two endpoints.
+
+    With max_spacing, the spacing grows geometrically from first_spacing until it
+    reaches max_spacing and stays there (uniform) up to the end.
+    """
 
     start: float
     end: float
     n_points: int
     ratio: float | None = None
     first_spacing: float | None = None
+    max_spacing: float | None = None
     kind: Literal["geometric"] = "geometric"
 
     def __post_init__(self) -> None:
@@ -53,6 +58,12 @@ class GeometricSpec:
             length = self.end - self.start
             if not 0.0 < self.first_spacing < length:
                 raise ValueError("geometric first_spacing must be between zero and the length")
+
+        # check the cap: growth from first_spacing must be needed, and possible below the cap
+        if self.max_spacing is not None:
+            _validate_spacing_cap(
+                self.end - self.start, self.n_points, self.first_spacing, self.max_spacing
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,3 +196,32 @@ def _validate_interval(start: float, end: float, n_points: int) -> None:
         raise ValueError("distribution n_points must be at least 2")
     if end <= start:
         raise ValueError("distribution end must be greater than start")
+
+
+def _validate_spacing_cap(
+    length: float, n_points: int, first_spacing: float | None, max_spacing: float
+) -> None:
+    """Validate a geometric distribution capped at max_spacing."""
+
+    # the cap works on growth from a given first spacing, not on a given ratio
+    if first_spacing is None:
+        raise ValueError("geometric max_spacing needs first_spacing (not ratio)")
+    if max_spacing <= first_spacing:
+        raise ValueError("geometric max_spacing must be larger than first_spacing")
+
+    # check: the points must need to grow (uniform first_spacing falls short of the end)
+    n_intervals = n_points - 1
+    if n_intervals * first_spacing >= length:
+        raise ValueError(
+            f"geometric first_spacing x (n_points - 1) = {n_intervals * first_spacing:.6g} "
+            f"already reaches the length {length:.6g}; nothing to grow or cap"
+        )
+
+    # check: even the fastest growth (first spacing, then all at the cap) must reach the end
+    longest = first_spacing + (n_intervals - 1) * max_spacing
+    if longest < length:
+        raise ValueError(
+            f"geometric max_spacing {max_spacing:.6g} is too small to reach the length "
+            f"{length:.6g} with {n_points} points (at most {longest:.6g}); "
+            f"raise max_spacing or n_points"
+        )

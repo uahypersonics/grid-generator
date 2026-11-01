@@ -158,6 +158,36 @@ def test_cli_init_then_run_writes_a_readable_grid(tmp_path: Path) -> None:
     np.testing.assert_allclose(written.y, expected.y)
 
 
+@pytest.mark.parametrize(("dims", "dimensionality"), [(1, 1), (2, 2), (3, 3)])
+def test_cli_init_dims_sets_the_axes(tmp_path: Path, dims: int, dimensionality: int) -> None:
+    """cartesian init --dims writes x, then y, then z; the grid has that many dimensions."""
+
+    # init and run
+    config_path = tmp_path / "cartesian.toml"
+    result_init = runner.invoke(
+        app, ["cartesian", "init", "--output", str(config_path), "--dims", str(dims)]
+    )
+    result_run = runner.invoke(app, ["cartesian", "run", str(config_path)])
+
+    # check
+    assert result_init.exit_code == 0, result_init.output
+    assert result_run.exit_code == 0, result_run.output
+    assert generate_cartesian(config_path).attrs["dimensionality"] == dimensionality
+
+
+def test_cli_init_rejects_bad_dims(tmp_path: Path) -> None:
+    """--dims outside 1-3 fails before any file is written."""
+
+    # run
+    config_path = tmp_path / "cartesian.toml"
+    result = runner.invoke(app, ["cartesian", "init", "--output", str(config_path), "--dims", "4"])
+
+    # check
+    assert result.exit_code == 1
+    assert "--dims must be 1, 2 or 3" in result.output
+    assert not config_path.exists()
+
+
 def test_cli_init_refuses_to_overwrite(tmp_path: Path) -> None:
     """init leaves an existing file alone unless --force is given."""
 

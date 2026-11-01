@@ -37,13 +37,13 @@ dataset = generate_cartesian("cartesian.toml")
 print(dataset.grid.shape)
 ```
 
-Body-fitted 2D grids around blunt bodies (blunted plate, wedge, sphere-cone)
+Body-fitted 2D grids around blunt bodies (blunted plate, wedge, sphere-cone, tangent ogive)
 use the geometry definitions from
 [canonical-geometries](https://github.com/uahypersonics/canonical-geometries):
 
 ```bash
-grid-generator body-fitted init
-grid-generator body-fitted run body_fitted.toml
+grid-generator plate init
+grid-generator plate run plate.toml
 ```
 
 ## Features
@@ -51,9 +51,12 @@ grid-generator body-fitted run body_fitted.toml
 - One-, two-, and three-dimensional Cartesian tensor-product grids
 - Constant-height body-fitted 2D grids with a polar nose block, SU2 boundary
   markers, and a grid quality report
+- Extrusion of plate and wedge grids in z into 3D grids
 - Equidistant, geometric, tanh, and segmented point distributions
+- `distribution info` reference of the distribution types and their keys, and
+  `distribution init/run` for 1D point files (.dat, .csv, .txt)
 - Composable cubic and quintic transitions between equidistant regions
-- Focused `cartesian init/run` and `body-fitted init/run` CLI workflows
+- Focused `cartesian`, `plate`, `wedge`, `cone` and `tangent-ogive` CLI workflows, each with `init/run`
 - HDF5 and SU2 output through `cfd-io`
 - Typed Python configuration and generation API
 
