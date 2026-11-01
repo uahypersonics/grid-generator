@@ -6,12 +6,23 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from grid_generator.config.markers import CartesianMarkersConfig
 from grid_generator.distributions.models import DistributionSpec
 from grid_generator.distributions.parse import parse_distribution
+
+# --------------------------------------------------
+# constants
+# --------------------------------------------------
+# [markers] keys of each axis: its first and last plane
+AXIS_MARKER_KEYS = {
+    "x": ("x_min", "x_max"),
+    "y": ("y_min", "y_max"),
+    "z": ("z_min", "z_max"),
+}
 
 
 # --------------------------------------------------
@@ -26,6 +37,7 @@ class CartesianConfig:
     y: DistributionSpec | None = None
     z: DistributionSpec | None = None
     dtype: str = "f8"
+    markers: CartesianMarkersConfig = field(default_factory=CartesianMarkersConfig)
 
     def __post_init__(self) -> None:
         """Validate output options."""
@@ -55,7 +67,7 @@ def load_cartesian_config(path: str | Path) -> CartesianConfig:
         data = tomllib.load(stream)
 
     # validate top-level sections
-    unknown_sections = sorted(set(data) - {"grid", "output"})
+    unknown_sections = sorted(set(data) - {"grid", "output", "markers"})
     if unknown_sections:
         unknown = ", ".join(unknown_sections)
         raise ValueError(f"unknown configuration sections: {unknown}")
@@ -90,12 +102,26 @@ def load_cartesian_config(path: str | Path) -> CartesianConfig:
     if not output_path.is_absolute():
         output_path = path.parent / output_path
 
+    # boundary names: the defaults unless [markers] renames them
+    markers = CartesianMarkersConfig.model_validate(data.get("markers", {}))
+
+    # check: names only for the ends of axes the grid has
+    for axis_name in ("y", "z"):
+        names_given = [
+            key for key in AXIS_MARKER_KEYS[axis_name] if key in markers.model_fields_set
+        ]
+        if axis_name not in grid and names_given:
+            raise ValueError(
+                f"[markers] {', '.join(names_given)} only apply with a [grid.{axis_name}] table"
+            )
+
     config = CartesianConfig(
         x=parse_distribution(grid["x"], "grid.x"),
         y=_parse_optional_axis(grid, "y"),
         z=_parse_optional_axis(grid, "z"),
         output=output_path,
         dtype=str(output.get("dtype", "f8")),
+        markers=markers,
     )
     return config
 

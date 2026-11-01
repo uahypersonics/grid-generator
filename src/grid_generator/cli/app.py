@@ -45,13 +45,15 @@ def main(
 
 
 # --------------------------------------------------
-# register subcommands
+# register subcommands (note: order of registration is order of appearance in the CLI help)
 # --------------------------------------------------
-app.add_typer(cartesian_app, name="cartesian")
-
-# body-fitted grids, one command group per geometry: plate, wedge, cone
-for geometry_type in GEOMETRY_HELP:
-    app.add_typer(build_geometry_app(geometry_type), name=geometry_type)
 
 # 1D point distributions: reference (info) and 1D point files (init / run)
 app.add_typer(distribution_app, name="distribution")
+
+# Cartesian grids: structured grids aligned with the coordinate axes
+app.add_typer(cartesian_app, name="cartesian")
+
+# body-fitted grids, one command group per geometry: plate, wedge, cone, ogive, ... (add more as needed)
+for geometry_type in GEOMETRY_HELP:
+    app.add_typer(build_geometry_app(geometry_type), name=geometry_type)

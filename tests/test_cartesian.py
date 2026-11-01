@@ -28,20 +28,28 @@ X_SPEC = EquidistantSpec(start=0.0, end=1.0, n_points=11)
 Y_SPEC = GeometricSpec(start=0.0, end=0.05, n_points=21, first_spacing=1.0e-4)
 Z_SPEC = EquidistantSpec(start=-0.1, end=0.1, n_points=5)
 
+# the default boundary names per grid side ([markers] left at its defaults)
+X_MARKERS = {"imin": "x_min", "imax": "x_max"}
+Y_MARKERS = {"jmin": "y_min", "jmax": "y_max"}
+Z_MARKERS = {"kmin": "z_min", "kmax": "z_max"}
+
 
 # --------------------------------------------------
 # generation
 # --------------------------------------------------
 @pytest.mark.parametrize(
-    ("y_spec", "z_spec", "shape", "dimensionality"),
+    ("y_spec", "z_spec", "shape", "dimensionality", "markers"),
     [
-        (None, None, (11, 1, 1), 1),
-        (Y_SPEC, None, (11, 21, 1), 2),
-        (Y_SPEC, Z_SPEC, (11, 21, 5), 3),
+        (None, None, (11, 1, 1), 1, X_MARKERS),
+        (Y_SPEC, None, (11, 21, 1), 2, X_MARKERS | Y_MARKERS),
+        (Y_SPEC, Z_SPEC, (11, 21, 5), 3, X_MARKERS | Y_MARKERS | Z_MARKERS),
+        (None, Z_SPEC, (11, 1, 5), 2, X_MARKERS | Z_MARKERS),
     ],
 )
-def test_grid_shape_and_attrs(y_spec, z_spec, shape: tuple, dimensionality: int) -> None:
-    """Omitted axes become singleton dimensions; attrs describe the grid."""
+def test_grid_shape_and_attrs(
+    y_spec, z_spec, shape: tuple, dimensionality: int, markers: dict
+) -> None:
+    """Omitted axes become singleton dimensions; attrs describe the grid and mark its ends."""
 
     # build
     config = CartesianConfig(x=X_SPEC, y=y_spec, z=z_spec, output=Path("grid.h5"))
@@ -52,6 +60,7 @@ def test_grid_shape_and_attrs(y_spec, z_spec, shape: tuple, dimensionality: int)
     assert dataset.attrs["dimensionality"] == dimensionality
     assert dataset.attrs["grid_type"] == "cartesian"
     assert (dataset.attrs["ni"], dataset.attrs["nj"], dataset.attrs["nk"]) == shape
+    assert dataset.attrs["markers"]["structured"] == markers
 
 
 def test_coordinates_follow_the_axes() -> None:
@@ -121,10 +130,14 @@ def test_load_resolves_output_next_to_the_config(tmp_path: Path) -> None:
         ('dtype = "f8"', 'dtype = "f2"', "dtype"),
         ('filename = "out/grid.h5"', 'filename = "out/grid.su2"', ".h5"),
         ("[output]", "[extra]\nkey = 1\n\n[output]", "unknown configuration sections"),
+        ("[output]", '[markers]\nx_mni = "inflow"\n\n[output]', "x_mni"),
+        ("[output]", '[markers]\nx_min = "in flow"\n\n[output]', "one word"),
+        ("[output]", '[markers]\nx_min = "fluid"\n\n[output]', "reserved"),
+        ("[output]", '[markers]\nz_max = "top"\n\n[output]', r"only apply with a \[grid.z\]"),
     ],
 )
 def test_load_rejects_bad_config(tmp_path: Path, old: str, new: str, message: str) -> None:
-    """Wrong grid type, unknown keys or sections, bad dtype or output suffix raise."""
+    """Wrong grid type, unknown keys or sections, bad dtype or output suffix, bad markers raise."""
 
     # break one line of a valid config
     config_text = VALID_CONFIG.replace(old, new, 1)
@@ -133,6 +146,28 @@ def test_load_rejects_bad_config(tmp_path: Path, old: str, new: str, message: st
 
     with pytest.raises(ValueError, match=message):
         load_cartesian_config(config_path)
+
+
+def test_markers_rename_the_sides_in_the_hdf5_file(tmp_path: Path) -> None:
+    """[markers] names reach the dataset and the HDF5 file; sides may share a name."""
+
+    # rename three sides, two of them to the same name
+    markers_table = '[markers]\nx_min = "inflow"\nx_max = "outflow"\ny_max = "outflow"\n\n'
+    config_text = VALID_CONFIG.replace("[output]", markers_table + "[output]", 1)
+    config_path = tmp_path / "cartesian.toml"
+    config_path.write_text(config_text)
+
+    # generate and write
+    from cfd_io import write_file
+
+    dataset = generate_cartesian(config_path)
+    write_file(tmp_path / "grid.h5", dataset)
+
+    # check: the renamed sides, the default for the rest, restored from the file
+    expected = {"imin": "inflow", "imax": "outflow", "jmin": "y_min", "jmax": "outflow"}
+    assert dataset.attrs["markers"]["structured"] == expected
+    written = read_file(tmp_path / "grid.h5", orient=False)
+    assert written.attrs["markers"] == {"structured": expected}
 
 
 # --------------------------------------------------

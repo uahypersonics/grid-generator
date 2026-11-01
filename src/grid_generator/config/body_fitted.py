@@ -26,8 +26,15 @@ from typing import Annotated, Any, Literal
 
 from canonical_geometries import Profile2D
 from canonical_geometries.config import GeometryConfig
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
+from grid_generator.config.markers import MarkersConfig
 from grid_generator.config.points import build_body_spec, build_normal_spec, parse_span
 from grid_generator.distributions.generate import build_distribution
 from grid_generator.distributions.models import DistributionSpec
@@ -47,6 +54,9 @@ EXTENT_KEYS = {
     "cone": "length",
     "tangent-ogive": "cylinder_length",
 }
+
+# [markers] keys that only apply to an extruded grid
+SPAN_MARKER_KEYS = ("span_min", "span_max")
 
 # axisymmetric bodies: the grid is the meridian plane, and [span] doesn't apply
 AXISYMMETRIC_TYPES = {"cone", "tangent-ogive"}
@@ -128,6 +138,7 @@ class BodyFittedConfig(BaseModel):
     points: PointsConfig
     output: OutputConfig
     span: Annotated[DistributionSpec | None, BeforeValidator(parse_span)] = None
+    markers: MarkersConfig = Field(default_factory=MarkersConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -221,6 +232,13 @@ class BodyFittedConfig(BaseModel):
             raise ValueError(
                 f"[span] extrudes planar bodies (plate, wedge) in z; a {geometry_type} is "
                 "axisymmetric and its 3D grid would be revolved, which isn't supported yet"
+            )
+
+        # check: span marker names only with a span to name
+        span_names_given = [key for key in SPAN_MARKER_KEYS if key in self.markers.model_fields_set]
+        if self.span is None and span_names_given:
+            raise ValueError(
+                f"[markers] {', '.join(span_names_given)} only apply with a [span] table"
             )
 
         # check: the Gmsh writer is 2D only

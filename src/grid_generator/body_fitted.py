@@ -42,21 +42,21 @@ from grid_generator.distributions import DistributionSpec, EquidistantSpec, buil
 # constants
 # --------------------------------------------------
 
-# SU2 / Gmsh boundary names for the four sides of the grid: imin is the stagnation
-# line ahead of the nose, imax the outflow at x_end, jmin the wall, jmax the outer
-# boundary
-BOUNDARY_MARKERS = {
-    "imin": "symmetry",
-    "imax": "outflow",
-    "jmin": "wall",
-    "jmax": "farfield",
+# grid side of each [markers] key (the names themselves come from the config): imin is
+# the stagnation line ahead of the nose, imax the outflow at x_end, jmin the wall,
+# jmax the outer boundary
+MARKER_SIDES = {
+    "symmetry": "imin",
+    "outflow": "imax",
+    "wall": "jmin",
+    "outer": "jmax",
 }
 
-# boundary names for the two extra sides of an extruded (3D) grid: the first and last
-# z-planes; the solver decides what they are (periodic, symmetry, ...)
-SPAN_MARKERS = {
-    "kmin": "span_min",
-    "kmax": "span_max",
+# the two extra sides of an extruded (3D) grid: the first and last z-planes; the
+# solver decides what they are (periodic, symmetry, ...)
+SPAN_MARKER_SIDES = {
+    "span_min": "kmin",
+    "span_max": "kmax",
 }
 
 
@@ -112,10 +112,13 @@ def generate_body_fitted(source: BodyFittedConfig | str | Path) -> Dataset:
     z = np.broadcast_to(z_axis[None, None, :], x.shape).copy()
     grid = StructuredGrid(x=x, y=y, z=z)
 
-    # markers: four sides in 2D, plus the two z-planes in 3D
-    markers = dict(BOUNDARY_MARKERS)
+    # markers: four sides in 2D, plus the two z-planes in 3D, named by [markers]
+    markers = {}
+    for key, side in MARKER_SIDES.items():
+        markers[side] = getattr(config.markers, key)
     if nk > 1:
-        markers.update(SPAN_MARKERS)
+        for key, side in SPAN_MARKER_SIDES.items():
+            markers[side] = getattr(config.markers, key)
     dimensionality = 3 if nk > 1 else 2
 
     # describe the grid; markers are what cfd-io's SU2 writer needs

@@ -20,7 +20,6 @@ from grid_generator import (
     grid_quality,
     load_body_fitted_config,
 )
-from grid_generator.body_fitted import BOUNDARY_MARKERS, SPAN_MARKERS
 from grid_generator.cli import app
 from grid_generator.config import (
     BODY_BLOCKS,
@@ -41,6 +40,10 @@ N_NOSE = 81
 N_BODY = 121
 N_NORMAL = 101
 FIRST_NORMAL_SPACING = 1.0e-6
+
+# the default boundary names per grid side ([markers] left at its defaults)
+BOUNDARY_MARKERS = {"imin": "symmetry", "imax": "outflow", "jmin": "wall", "jmax": "farfield"}
+SPAN_MARKERS = {"kmin": "span_min", "kmax": "span_max"}
 
 # the template's [span] table (init --span), and the same table with 5 z-planes
 SPAN_DEFAULT = '[span]\ntype = "equidistant"\nstart = 0.0\nend = 2.0e-3\nn_points = 21'
@@ -647,6 +650,78 @@ spacing = 1.0e-4
     # check: ends at the height, uniform 0.1 mm cells at the top
     assert normal_distances[-1] == HEIGHT
     np.testing.assert_allclose(np.diff(normal_distances)[-5:], 1.0e-4, rtol=1e-9)
+
+
+# --------------------------------------------------
+# boundary names ([markers])
+# --------------------------------------------------
+def test_markers_rename_the_sides_in_the_su2_file(tmp_path: Path) -> None:
+    """[markers] names reach the dataset and the SU2 file; sides may share a name."""
+
+    # rename the wall, and merge outflow into the outer boundary
+    replacements = (
+        ('wall = "wall"', 'wall = "plate_wall"'),
+        ('outflow = "outflow"', 'outflow = "farfield"'),
+    )
+    config_path = write_template(tmp_path, replacements=replacements)
+    dataset = generate_body_fitted(config_path)
+    result = runner.invoke(app, ["plate", "run", str(config_path)])
+
+    # check the dataset
+    assert result.exit_code == 0, result.output
+    assert dataset.attrs["markers"]["structured"] == {
+        "imin": "symmetry",
+        "imax": "farfield",
+        "jmin": "plate_wall",
+        "jmax": "farfield",
+    }
+
+    # check the SU2 file: three markers, the shared one holding both sides' faces
+    su2_lines = (tmp_path / "plate_local.su2").read_text().splitlines()
+    tags = [line.split("=")[1].strip() for line in su2_lines if line.startswith("MARKER_TAG")]
+    counts = [
+        int(su2_lines[n + 1].split("=")[1])
+        for n, line in enumerate(su2_lines)
+        if line.startswith("MARKER_TAG")
+    ]
+    marker_faces = dict(zip(tags, counts, strict=True))
+    assert sorted(marker_faces) == ["farfield", "plate_wall", "symmetry"]
+    assert marker_faces["farfield"] == (N_NOSE + N_BODY - 2) + (N_NORMAL - 1)
+
+
+def test_markers_name_the_span_sides(tmp_path: Path) -> None:
+    """With [span], span_min and span_max name the first and last z-plane."""
+
+    # template with the span; rename the span sides
+    config_text = body_fitted_template("plate", span=True)
+    config_text = config_text.replace('span_min = "span_min"', 'span_min = "periodic_a"')
+    config_text = config_text.replace('span_max = "span_max"', 'span_max = "periodic_b"')
+    config_path = tmp_path / "plate.toml"
+    config_path.write_text(config_text)
+
+    # check
+    markers = generate_body_fitted(config_path).attrs["markers"]["structured"]
+    assert (markers["kmin"], markers["kmax"]) == ("periodic_a", "periodic_b")
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('wall = "wall"', 'wall = "no slip"', "must be one word"),
+        ('wall = "wall"', 'wall = ""', "must be one word"),
+        ('wall = "wall"', 'wall = "Fluid"', "reserved"),
+        ('wall = "wall"', 'wal = "wall"', "wal"),
+        ('symmetry = "symmetry"', 'symmetry = "symmetry"\nspan_min = "a"', "only apply with a"),
+    ],
+)
+def test_load_rejects_bad_markers(tmp_path: Path, old: str, new: str, message: str) -> None:
+    """Names with spaces, empty or reserved names, unknown keys, span names without a span."""
+
+    # write a broken config
+    config_path = write_config(tmp_path, old, new)
+
+    with pytest.raises(ValueError, match=message):
+        load_body_fitted_config(config_path)
 
 
 # --------------------------------------------------

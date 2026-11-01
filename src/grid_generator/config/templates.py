@@ -1,7 +1,7 @@
 """Starter configurations written by `grid-generator <command> init`.
 
 The templates are put together from TOML blocks: per geometry (description,
-[geometry], [domain]), and shared blocks for the points, span and output. The body
+[geometry], [domain]), and shared blocks for the points, span, markers and output. The body
 and wall-normal distributions each have a choice of block (init --body, --normal),
 the span block is optional (init --span), and Cartesian grids pick their axes
 (init --dims). 1D distributions take their example from the distribution reference
@@ -70,6 +70,19 @@ CARTESIAN_SEGMENTED_EXAMPLE = """\
 # end = 1.0
 # spacing = 0.01
 """
+
+CARTESIAN_MARKERS_BLOCK = """\
+# Boundary names in the grid file (one per end of each axis); the solver input assigns
+# the boundary conditions to them. Two sides may share a name.
+[markers]
+"""
+
+# [markers] lines of each axis, added with the axis
+CARTESIAN_MARKER_LINES: dict[str, str] = {
+    "x": 'x_min = "x_min"\nx_max = "x_max"\n',
+    "y": 'y_min = "y_min"\ny_max = "y_max"\n',
+    "z": 'z_min = "z_min"\nz_max = "z_max"\n',
+}
 
 CARTESIAN_OUTPUT_BLOCK = """\
 [output]
@@ -270,6 +283,27 @@ end = 2.0e-3
 n_points = 21
 """
 
+MARKERS_BLOCK = """\
+# Boundary names in the grid file; the solver input assigns the boundary conditions to
+# them. Two sides may share a name.
+[markers]
+# the body
+wall = "wall"
+# outer boundary
+outer = "farfield"
+# outflow plane at x_end
+outflow = "outflow"
+# stagnation line ahead of the nose (on the axis for axisymmetric bodies)
+symmetry = "symmetry"
+"""
+
+# extra [markers] lines for an extruded grid (init --span)
+SPAN_MARKERS_LINES = """\
+# first and last z-plane of the extruded grid
+span_min = "span_min"
+span_max = "span_max"
+"""
+
 BODY_FITTED_OUTPUT_BLOCK = """\
 # The path is relative to this file.
 [output]
@@ -333,6 +367,8 @@ def cartesian_template(dims: int = CARTESIAN_DEFAULT_DIMS) -> str:
     for name in axis_names[:dims]:
         blocks.append(CARTESIAN_AXIS_BLOCKS[name])
     blocks.append(CARTESIAN_SEGMENTED_EXAMPLE)
+    marker_lines = [CARTESIAN_MARKER_LINES[name] for name in axis_names[:dims]]
+    blocks.append(CARTESIAN_MARKERS_BLOCK + "".join(marker_lines))
     blocks.append(CARTESIAN_OUTPUT_BLOCK)
     template = "\n".join(blocks)
 
@@ -393,6 +429,9 @@ def body_fitted_template(
     ]
     if span:
         blocks.append(SPAN_BLOCK)
+        blocks.append(MARKERS_BLOCK + SPAN_MARKERS_LINES)
+    else:
+        blocks.append(MARKERS_BLOCK)
     blocks.append(BODY_FITTED_OUTPUT_BLOCK.format(geometry_type=geometry_type))
     template = "\n".join(blocks)
 
